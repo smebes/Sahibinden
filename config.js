@@ -10,5 +10,11 @@ const VIEW_BOT_API = {
   apiPrefix: '/sahibinden',
   fleet: {
     heartbeatMin: 2
+  },
+  store: {
+    key: 'fixpartsyedekparca',
+    referer: 'https://fixpartsyedekparca.sahibinden.com/',
+    listBaseUrl: 'https://fixpartsyedekparca.sahibinden.com/yedek-parca-aksesuar-donanim-tuning',
+    pageSize: 20
   }
 };

@@ -1,183 +1,185 @@
 const $ = (id) => document.getElementById(id);
 
 const els = {
-  statusBadge: $("statusBadge"),
-  statusDetail: $("statusDetail"),
-  statFound: $("statFound"),
-  statViews: $("statViews"),
-  statFailed: $("statFailed"),
-  statQueue: $("statQueue"),
-  listingUrls: $("listingUrls"),
-  lineCount: $("lineCount"),
-  processLimit: $("processLimit"),
-  storeUrl: $("storeUrl"),
-  scanAllPages: $("scanAllPages"),
-  delayMin: $("delayMin"),
-  delayMax: $("delayMax"),
-  dwell: $("dwell"),
-  headlessTabs: $("headlessTabs"),
-  enableFavorite: $("enableFavorite"),
-  apiUrl: $("apiUrl"),
-  fleetMachineId: $("fleetMachineId"),
-  fleetMachineLabel: $("fleetMachineLabel"),
-  btnFleetStart: $("btnFleetStart"),
-  btnFleetStop: $("btnFleetStop"),
-  btnFleetDash: $("btnFleetDash"),
-  btnStart: $("btnStart"),
-  btnPause: $("btnPause"),
-  btnStop: $("btnStop"),
-  btnFetchStore: $("btnFetchStore"),
+  statusBadge: $('statusBadge'),
+  phaseLabel: $('phaseLabel'),
+  statusDetail: $('statusDetail'),
+  dbLinks: $('dbLinks'),
+  dbGeneral: $('dbGeneral'),
+  dbDetail: $('dbDetail'),
+  dbViews: $('dbViews'),
+  statSync: $('statSync'),
+  statDetails: $('statDetails'),
+  statViews: $('statViews'),
+  statFav: $('statFav'),
+  apiUrl: $('apiUrl'),
+  fleetMachineId: $('fleetMachineId'),
+  storeUrl: $('storeUrl'),
+  listBaseUrl: $('listBaseUrl'),
+  delayMin: $('delayMin'),
+  delayMax: $('delayMax'),
+  dwell: $('dwell'),
+  headlessTabs: $('headlessTabs'),
+  btnStart: $('btnStart'),
+  btnPause: $('btnPause'),
+  btnStop: $('btnStop'),
+  btnFleetDash: $('btnFleetDash'),
+};
+
+const PHASE_LABELS = {
+  idle: 'Beklemede',
+  start: 'Başlıyor',
+  sync: '1 · Liste tarama',
+  detail: '2 · Detay çekme',
+  view: '3 · Görüntüleme',
+  wait: 'Bekleme',
+  done: 'Tamamlandı',
+  error: 'Hata',
 };
 
 function readSettingsFromForm() {
   return {
-    listingUrlsText: els.listingUrls.value,
-    processLimit: Number(els.processLimit.value) || 100,
+    apiUrl: els.apiUrl?.value?.trim() || '',
+    fleetMachineId: els.fleetMachineId?.value?.trim() || '',
+    fleetMachineLabel: els.fleetMachineId?.value?.trim() || '',
     storeUrl: els.storeUrl.value.trim(),
-    scanAllPages: els.scanAllPages.checked,
+    listBaseUrl: els.listBaseUrl?.value?.trim() || '',
+    storeKey: 'fixpartsyedekparca',
     delayMinMs: Number(els.delayMin.value) * 1000,
     delayMaxMs: Number(els.delayMax.value) * 1000,
     dwellMs: Number(els.dwell.value) * 1000,
     headlessTabs: els.headlessTabs.checked,
-    enableFavorite: els.enableFavorite.checked,
-    apiUrl: els.apiUrl?.value?.trim() || '',
-    fleetMachineId: els.fleetMachineId?.value?.trim() || '',
-    fleetMachineLabel: els.fleetMachineLabel?.value?.trim() || '',
+    pipelineMode: true,
+    enableFavorite: true,
   };
 }
 
 function applySettingsToForm(settings) {
-  if (settings.listingUrlsText != null) els.listingUrls.value = settings.listingUrlsText;
-  if (settings.processLimit != null) els.processLimit.value = settings.processLimit;
+  if (settings.apiUrl && els.apiUrl) els.apiUrl.value = settings.apiUrl;
+  if (settings.fleetMachineId && els.fleetMachineId) els.fleetMachineId.value = settings.fleetMachineId;
   if (settings.storeUrl) els.storeUrl.value = settings.storeUrl;
-  if (settings.scanAllPages != null) els.scanAllPages.checked = settings.scanAllPages;
+  if (settings.listBaseUrl && els.listBaseUrl) els.listBaseUrl.value = settings.listBaseUrl;
   if (settings.delayMinMs != null) els.delayMin.value = settings.delayMinMs / 1000;
   if (settings.delayMaxMs != null) els.delayMax.value = settings.delayMaxMs / 1000;
   if (settings.dwellMs != null) els.dwell.value = settings.dwellMs / 1000;
   if (settings.headlessTabs != null) els.headlessTabs.checked = settings.headlessTabs;
-  if (settings.enableFavorite != null) els.enableFavorite.checked = settings.enableFavorite;
-  if (settings.apiUrl && els.apiUrl) els.apiUrl.value = settings.apiUrl;
-  if (settings.fleetMachineId && els.fleetMachineId) els.fleetMachineId.value = settings.fleetMachineId;
-  if (settings.fleetMachineLabel && els.fleetMachineLabel) els.fleetMachineLabel.value = settings.fleetMachineLabel;
-  updateLineCount();
-}
-
-function updateLineCount() {
-  const lines = els.listingUrls.value
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  els.lineCount.textContent = `${lines.length} satır`;
 }
 
 function setUiRunning(running, paused = false) {
   els.btnStart.disabled = running;
   els.btnPause.disabled = !running;
   els.btnStop.disabled = !running;
-  els.btnFetchStore.disabled = running;
-  els.btnPause.textContent = paused ? "Devam" : "Duraklat";
+  els.btnPause.textContent = paused ? 'Devam' : 'Duraklat';
 
-  els.statusBadge.className = "badge";
+  els.statusBadge.className = 'badge';
   if (!running) {
-    els.statusBadge.textContent = "Hazır";
+    els.statusBadge.textContent = 'Hazır';
   } else if (paused) {
-    els.statusBadge.textContent = "Duraklatıldı";
-    els.statusBadge.classList.add("paused");
+    els.statusBadge.textContent = 'Duraklatıldı';
+    els.statusBadge.classList.add('paused');
   } else {
-    els.statusBadge.textContent = "Çalışıyor";
-    els.statusBadge.classList.add("running");
+    els.statusBadge.textContent = 'Çalışıyor';
+    els.statusBadge.classList.add('running');
   }
 }
 
+function updateDbStats(db) {
+  if (!db) return;
+  els.dbLinks.textContent = db.links_total ?? 0;
+  els.dbGeneral.textContent = db.general_total ?? 0;
+  els.dbDetail.textContent = db.detail_total ?? 0;
+  els.dbViews.textContent = db.views_total ?? 0;
+  if (db.need_detail > 0 && !stateRunning) {
+    els.statusDetail.textContent = `${db.need_detail} ilanın detayı bekliyor`;
+  }
+}
+
+let stateRunning = false;
+
 function updateStats(data) {
   const s = data.stats || {};
-  els.statFound.textContent = s.listingsFound ?? 0;
+  const db = data.dbStats;
+  els.statSync.textContent = s.syncPagesDone ?? 0;
+  els.statDetails.textContent = s.detailsDone ?? 0;
   els.statViews.textContent = s.viewsDone ?? 0;
-  els.statFailed.textContent = s.viewsFailed ?? 0;
-  els.statQueue.textContent = data.queueLength ?? 0;
+  els.statFav.textContent = s.favoritesDone ?? 0;
+  if (db) updateDbStats(db);
 
-  if (data.phase === "view" && data.currentListing) {
-    els.statusDetail.textContent = `Görüntüleniyor: ${data.currentListing}`;
-  } else if (data.phase === "done") {
-    els.statusBadge.textContent = "Tamamlandı";
-    els.statusBadge.classList.add("done");
-    els.statusDetail.textContent = `${s.viewsDone ?? 0} ilan görüntülendi.`;
+  const phase = data.phase || 'idle';
+  els.phaseLabel.textContent = PHASE_LABELS[phase] || phase;
+
+  if (data.message) {
+    els.statusDetail.textContent = data.message;
+  } else if (phase === 'view' && data.currentListing) {
+    els.statusDetail.textContent = data.currentListing;
+  } else if (phase === 'done') {
+    els.statusBadge.textContent = 'Tamamlandı';
+    els.statusBadge.classList.add('done');
     setUiRunning(false);
-  } else if (data.phase === "error") {
-    els.statusBadge.textContent = "Hata";
-    els.statusBadge.classList.add("error");
-    els.statusDetail.textContent = data.error || "Bilinmeyen hata";
+    stateRunning = false;
+  } else if (phase === 'error') {
+    els.statusBadge.textContent = 'Hata';
+    els.statusBadge.classList.add('error');
+    els.statusDetail.textContent = data.error || 'Bilinmeyen hata';
     setUiRunning(false);
-  } else if (data.phase === "fetch") {
-    els.statusDetail.textContent = data.message || "Mağaza taranıyor…";
+    stateRunning = false;
   }
 }
 
 async function refreshStatus() {
-  const res = await chrome.runtime.sendMessage({ type: "status" });
+  const res = await chrome.runtime.sendMessage({ type: 'status' });
+  stateRunning = res.running;
   setUiRunning(res.running, res.paused);
   updateStats({
     stats: res.stats,
-    queueLength: res.queueLength,
+    phase: res.phase,
+    dbStats: res.dbStats,
     ...(res.lastProgress || {}),
   });
 }
 
-els.listingUrls.addEventListener("input", updateLineCount);
+async function refreshDbOnly() {
+  const res = await chrome.runtime.sendMessage({ type: 'getDbStats' });
+  if (res?.dbStats) updateDbStats(res.dbStats);
+}
 
-els.btnStart.addEventListener("click", async () => {
+els.btnStart.addEventListener('click', async () => {
   const settings = readSettingsFromForm();
-  if (!settings.listingUrlsText.trim()) {
-    els.statusDetail.textContent = "En az bir ilan linki ekleyin.";
+  if (!settings.apiUrl) {
+    els.statusDetail.textContent = 'API sunucusu adresi gerekli.';
     return;
   }
-  await chrome.runtime.sendMessage({ type: "saveSettings", settings });
+  if (!settings.fleetMachineId) {
+    els.statusDetail.textContent = 'Makine ID girin (örn. sahibinden-GPU-1).';
+    return;
+  }
+  await chrome.runtime.sendMessage({ type: 'saveSettings', settings });
   setUiRunning(true);
-  const res = await chrome.runtime.sendMessage({ type: "start" });
+  stateRunning = true;
+  const res = await chrome.runtime.sendMessage({ type: 'start' });
   if (res?.error) {
     setUiRunning(false);
+    stateRunning = false;
     els.statusDetail.textContent = res.error;
   }
 });
 
-els.btnFetchStore.addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({
-    type: "saveSettings",
-    settings: readSettingsFromForm(),
-  });
-  els.btnFetchStore.disabled = true;
-  els.statusDetail.textContent = "Mağaza taranıyor…";
-  const res = await chrome.runtime.sendMessage({ type: "fetchFromStore" });
-  els.btnFetchStore.disabled = false;
-  if (res?.error) {
-    els.statusDetail.textContent = res.error;
-    return;
-  }
-  if (res?.listingUrlsText != null) {
-    els.listingUrls.value = res.listingUrlsText;
-    updateLineCount();
-  }
-  const pages = res?.pagesScanned ?? 1;
-  const total = res?.total ?? 0;
-  els.statusDetail.textContent =
-    `${res?.added ?? 0} yeni ilan eklendi (${pages} sayfa tarandı, listede ${total} ilan).`;
-});
-
-els.btnPause.addEventListener("click", async () => {
-  const res = await chrome.runtime.sendMessage({ type: "status" });
+els.btnPause.addEventListener('click', async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'status' });
   if (res.paused) {
-    await chrome.runtime.sendMessage({ type: "resume" });
+    await chrome.runtime.sendMessage({ type: 'resume' });
     setUiRunning(true, false);
   } else {
-    await chrome.runtime.sendMessage({ type: "pause" });
+    await chrome.runtime.sendMessage({ type: 'pause' });
     setUiRunning(true, true);
   }
 });
 
-els.btnStop.addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "stop" });
+els.btnStop.addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'stop' });
   setUiRunning(false);
-  els.statusDetail.textContent = "Durduruldu.";
+  stateRunning = false;
+  els.statusDetail.textContent = 'Durduruldu.';
 });
 
 function fleetDashboardUrl(apiUrl) {
@@ -189,42 +191,31 @@ function fleetDashboardUrl(apiUrl) {
   }
 }
 
-els.btnFleetStart?.addEventListener('click', async () => {
-  const settings = readSettingsFromForm();
-  if (!settings.fleetMachineId) {
-    els.statusDetail.textContent = 'Fleet için Makine ID girin (örn. sahibinden-GPU-1)';
-    return;
-  }
-  await chrome.runtime.sendMessage({ type: 'saveSettings', settings });
-  const res = await chrome.runtime.sendMessage({
-    type: 'START_FLEET',
-    fleetMachineId: settings.fleetMachineId,
-    fleetMachineLabel: settings.fleetMachineLabel,
-    apiUrl: settings.apiUrl,
-  });
-  if (res?.error) els.statusDetail.textContent = res.error;
-  else els.statusDetail.textContent = `Fleet ${settings.fleetMachineId} başlatıldı`;
-});
-
-els.btnFleetStop?.addEventListener('click', async () => {
-  await chrome.runtime.sendMessage({ type: 'STOP_FLEET' });
-  els.statusDetail.textContent = 'Fleet durduruldu';
-});
-
 els.btnFleetDash?.addEventListener('click', () => {
   chrome.tabs.create({ url: fleetDashboardUrl(els.apiUrl?.value) });
 });
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "progress") {
+  if (msg.type === 'progress') {
+    stateRunning = msg.running;
     setUiRunning(msg.running, msg.paused);
     updateStats(msg);
   }
 });
 
 (async () => {
-  const res = await chrome.runtime.sendMessage({ type: "getSettings" });
-  if (res?.settings) applySettingsToForm(res.settings);
+  const res = await chrome.runtime.sendMessage({ type: 'getSettings' });
+  if (res?.settings) {
+    applySettingsToForm(res.settings);
+    if (!els.listBaseUrl.value) {
+      els.listBaseUrl.value = 'https://fixpartsyedekparca.sahibinden.com/yedek-parca-aksesuar-donanim-tuning';
+    }
+  }
+  if (!els.apiUrl.value) {
+    els.apiUrl.value = 'http://51.102.128.78:3009';
+  }
   await refreshStatus();
+  await refreshDbOnly();
   setInterval(refreshStatus, 2000);
+  setInterval(refreshDbOnly, 8000);
 })();
