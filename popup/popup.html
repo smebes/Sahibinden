@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FixParts Görüntüleme</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>FixParts Görüntüleme</h1>
+      <p class="subtitle">Seçtiğiniz ilanlara görüntüleme yapar</p>
+    </header>
+
+    <section class="status" id="statusBox">
+      <span class="badge" id="statusBadge">Hazır</span>
+      <div class="stats">
+        <div><strong id="statFound">0</strong><span>Listede</span></div>
+        <div><strong id="statViews">0</strong><span>Görüntüleme</span></div>
+        <div><strong id="statFailed">0</strong><span>Hata</span></div>
+        <div><strong id="statQueue">0</strong><span>Kuyruk</span></div>
+      </div>
+      <p class="detail" id="statusDetail"></p>
+    </section>
+
+    <section class="settings">
+      <label>
+        İlan listesi
+        <span class="meta" id="lineCount">0 satır</span>
+        <textarea
+          id="listingUrls"
+          rows="8"
+          placeholder="Her satıra bir ilan linki yapıştırın&#10;https://www.sahibinden.com/ilan/.../detay"
+        ></textarea>
+      </label>
+
+      <label>
+        En fazla kaç ilan (mağaza tarama + görüntüleme limiti)
+        <input type="number" id="processLimit" min="1" max="500" value="100" />
+      </label>
+
+      <details class="optional-store">
+        <summary>Mağazadan listeye ekle (isteğe bağlı)</summary>
+        <label>
+          Mağaza URL
+          <input type="url" id="storeUrl" value="https://fixpartsyedekparca.sahibinden.com/" />
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" id="scanAllPages" />
+          Limit yok — mağazanın tüm sayfalarını tara
+        </label>
+        <button type="button" id="btnFetchStore" class="secondary full">Mağazadan listeye ekle</button>
+      </details>
+
+      <div class="row">
+        <label>
+          Min bekleme (sn)
+          <input type="number" id="delayMin" min="1" max="120" value="8" />
+        </label>
+        <label>
+          Max bekleme (sn)
+          <input type="number" id="delayMax" min="1" max="120" value="15" />
+        </label>
+      </div>
+
+      <label>
+        İlan başına kalma (sn)
+        <input type="number" id="dwell" min="2" max="60" value="8" />
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="headlessTabs" checked />
+        İlanları arka planda aç
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="enableFavorite" />
+        Görüntüleme sonrası favorile (düşük yoğunluk önerilir)
+      </label>
+    </section>
+
+    <section class="settings fleet-block">
+      <h2 class="section-title">Fleet (dashboard)</h2>
+      <label>
+        API
+        <input type="url" id="apiUrl" placeholder="http://51.102.128.78:3009" />
+      </label>
+      <label>
+        Makine ID
+        <input type="text" id="fleetMachineId" placeholder="sahibinden-GPU-1" />
+      </label>
+      <label>
+        Etiket
+        <input type="text" id="fleetMachineLabel" placeholder="GPU-1" />
+      </label>
+      <div class="actions">
+        <button type="button" id="btnFleetStart" class="secondary">Fleet başlat</button>
+        <button type="button" id="btnFleetStop" class="secondary">Fleet durdur</button>
+        <button type="button" id="btnFleetDash" class="secondary full">Fleet dashboard aç</button>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button type="button" id="btnStart" class="primary">Başlat</button>
+      <button type="button" id="btnPause" class="secondary" disabled>Duraklat</button>
+      <button type="button" id="btnStop" class="danger" disabled>Durdur</button>
+    </section>
+
+    <p class="hint">
+      “Mağazadan listeye ekle”, limit kadar ilan toplanana kadar sayfa sayfa ilerler (ör. 80 limit +
+      sayfa başı ~20 ilan → 4 sayfa). “Tüm sayfaları tara” işaretli değilse limit geçilmez.
+    </p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
