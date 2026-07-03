@@ -416,7 +416,9 @@ async function syncOneListPage() {
 }
 
 async function scrapeAndSaveDetail(job) {
-  const { ilanId, url, title } = job;
+  const ilanId = job.ilanId || job.ilan_id;
+  const { url, title } = job;
+  if (!ilanId) throw new Error('Job ilan_id eksik');
   const { headlessTabs } = state.settings;
   state.phase = 'detail';
   await broadcastProgress({ message: `Detay: ${title || ilanId}` });
