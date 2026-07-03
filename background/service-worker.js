@@ -22,9 +22,6 @@ const state = {
     detailsFailed: 0,
   },
   dbStats: null,
-  syncOffset: 0,
-  syncTotalPages: null,
-  listScanComplete: false,
   syncTabId: null,
   settings: null,
   fleetMode: false,
@@ -126,8 +123,6 @@ async function broadcastProgress(extra = {}) {
     queueLength: state.queue.length,
     stats: { ...state.stats },
     dbStats: state.dbStats,
-    syncOffset: state.syncOffset,
-    syncTotalPages: state.syncTotalPages,
     ...extra,
   };
   await chrome.storage.local.set({ lastProgress: payload });
@@ -261,19 +256,25 @@ async function refreshDbStats() {
 
 async function syncOneListPage() {
   const store = storeConfig(state.settings);
-  const pageSize = store.pageSize;
-  const offset = state.syncOffset;
-  const listPage = Math.floor(offset / pageSize) + 1;
-  const url = `${store.listBaseUrl}?pagingOffset=${offset}&sorting=storeShowcase`;
+  const machineId = state.fleetMachineId || 'local';
+
+  const claim = await fleetGet('/listings/claim-list-page', {
+    storeKey: store.key,
+    machineId,
+    pageSize: store.pageSize,
+  });
+
+  if (!claim?.job) {
+    return false;
+  }
+
+  const { pagingOffset, listPage } = claim.job;
+  const url = `${store.listBaseUrl}?pagingOffset=${pagingOffset}&sorting=storeShowcase`;
 
   state.phase = 'sync';
-  await broadcastProgress({ message: `Liste sayfası ${listPage} taranıyor…` });
+  await broadcastProgress({ message: `Liste sayfa ${listPage} · makine ${machineId}` });
 
   const parsed = await fetchListPageViaTab(url);
-
-  if (parsed.totalPages && !state.syncTotalPages) {
-    state.syncTotalPages = parsed.totalPages;
-  }
 
   if (parsed.items.length) {
     await fleetPost('/listings/sync-batch', {
@@ -284,23 +285,22 @@ async function syncOneListPage() {
     state.stats.listingsFound += parsed.items.length;
   }
 
+  const listScanComplete = parsed.items.length === 0
+    || (parsed.totalPages && listPage >= parsed.totalPages);
+
+  await fleetPost('/listings/complete-list-page', {
+    storeKey: store.key,
+    pagingOffset,
+    itemsCount: parsed.items.length,
+    totalPages: parsed.totalPages || null,
+    listScanComplete,
+  });
+
   state.stats.syncPagesDone += 1;
-  state.syncOffset += pageSize;
-
-  const limit = state.settings.syncPageLimit;
-  const reachedEnd = parsed.items.length === 0
-    || (state.syncTotalPages && listPage >= state.syncTotalPages)
-    || (limit && state.stats.syncPagesDone >= limit);
-
-  if (reachedEnd) {
-    state.syncOffset = 0;
-    state.stats.syncPagesDone = 0;
-  }
-
   await refreshDbStats();
   await broadcastProgress();
   await sleep(randomDelay(800, 1500));
-  return !reachedEnd;
+  return !listScanComplete;
 }
 
 async function scrapeAndSaveDetail(job) {
@@ -334,6 +334,7 @@ async function scrapeAndSaveDetail(job) {
     fleetLog('info', 'detail_saved', title || ilanId, { ilanId }).catch(() => {});
   } catch (err) {
     state.stats.detailsFailed += 1;
+    fleetPost(`/listings/${ilanId}/release-detail`, {}).catch(() => {});
     fleetLog('error', 'detail_failed', err.message, { ilanId, url }).catch(() => {});
     console.error('Detay hatası:', url, err);
   } finally {
@@ -415,59 +416,57 @@ async function runPipeline() {
     }
     if (!state.running) break;
 
+    await refreshDbStats();
     const stats = state.dbStats || {};
-    const needDetail = stats.need_detail || 0;
-    const readyView = stats.ready_view || 0;
+    const machineId = state.fleetMachineId || 'local';
 
-    if (!state.listScanComplete) {
+    if (!stats.list_scan_complete) {
       try {
         const hasMore = await syncOneListPage();
         if (hasMore) continue;
-        state.listScanComplete = true;
         await closeSyncTab();
       } catch (err) {
         await closeSyncTab();
-        fleetLog('error', 'sync_failed', err.message, { offset: state.syncOffset }).catch(() => {});
+        fleetLog('error', 'sync_failed', err.message, { machineId }).catch(() => {});
         await broadcastProgress({ message: `Liste hatası: ${err.message} — 60 sn sonra tekrar` });
         await sleep(60000);
         continue;
       }
     }
 
-    if (needDetail > 0) {
+    if ((stats.need_detail || 0) > 0) {
       const { items } = await fleetGet('/listings/need-detail', {
         storeKey: store.key,
-        limit: 3,
+        machineId,
+        limit: 1,
       });
       if (items?.length) {
         for (const job of items) {
           if (!state.running || state.paused) break;
           await scrapeAndSaveDetail(job);
         }
-        await refreshDbStats();
         continue;
       }
     }
 
-    if (readyView > 0) {
+    if ((stats.ready_view || 0) > 0) {
       const { job } = await fleetGet('/listings/claim-view', {
         storeKey: store.key,
-        machineId: state.fleetMachineId || 'local',
+        machineId,
       });
       if (job) {
         await viewListingFromJob(job);
-        await refreshDbStats();
         continue;
       }
     }
 
     state.phase = 'wait';
-    await broadcastProgress({ message: 'Yeni iş yok, bekleniyor…' });
-    state.syncOffset = 0;
-    state.syncTotalPages = null;
-    state.listScanComplete = false;
+    await broadcastProgress({
+      message: stats.list_scan_complete
+        ? 'Tüm işler güncel, bekleniyor…'
+        : 'Başka makine liste tarıyor veya iş kuyruğu boş…',
+    });
     await sleep(30000);
-    await refreshDbStats();
   }
 }
 
@@ -558,7 +557,10 @@ function buildPopupMessage() {
   if (state.running) {
     const phaseLabel = { sync: 'Liste', detail: 'Detay', view: 'Görüntüleme', wait: 'Bekleme' }[state.phase] || state.phase;
     if (d) {
-      return `${phaseLabel} · ${d.links_total} link · ${d.detail_total} detay · ${d.views_total} görüntüleme`;
+      const listInfo = d.list_scan_complete
+        ? 'liste tamam'
+        : `${d.list_pages_done || 0}/${d.total_pages || '?'} sayfa`;
+      return `${phaseLabel} · ${listInfo} · ${d.detail_total} detay · ${d.views_total} görüntüleme`;
     }
     return `${phaseLabel} · görüntüleme ${s.viewsDone}`;
   }
@@ -645,9 +647,6 @@ async function startFleetMode() {
       detailsDone: 0,
       detailsFailed: 0,
     };
-    state.syncOffset = 0;
-    state.syncTotalPages = null;
-    state.listScanComplete = false;
     runBot();
   }
 }
@@ -711,9 +710,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             detailsDone: 0,
             detailsFailed: 0,
           };
-          state.syncOffset = 0;
-          state.syncTotalPages = null;
-          state.listScanComplete = false;
           runBot();
           sendResponse({ ok: true, mode: 'pipeline' });
           break;

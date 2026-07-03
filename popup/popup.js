@@ -5,7 +5,7 @@ const els = {
   phaseLabel: $('phaseLabel'),
   statusDetail: $('statusDetail'),
   dbLinks: $('dbLinks'),
-  dbGeneral: $('dbGeneral'),
+  dbPages: $('dbPages'),
   dbDetail: $('dbDetail'),
   dbViews: $('dbViews'),
   statSync: $('statSync'),
@@ -86,7 +86,10 @@ function setUiRunning(running, paused = false) {
 function updateDbStats(db) {
   if (!db) return;
   els.dbLinks.textContent = db.links_total ?? 0;
-  els.dbGeneral.textContent = db.general_total ?? 0;
+  const pages = db.list_scan_complete
+    ? `${db.list_pages_done ?? 0} ✓`
+    : `${db.list_pages_done ?? 0}/${db.total_pages ?? '?'}`;
+  els.dbPages.textContent = pages;
   els.dbDetail.textContent = db.detail_total ?? 0;
   els.dbViews.textContent = db.views_total ?? 0;
   if (db.need_detail > 0 && !stateRunning) {

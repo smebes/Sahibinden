@@ -17,7 +17,19 @@ Zaten taranmış ilanlarda yalnızca görüntüleme yapılır; link ve genel bil
 1. Chrome → `chrome://extensions` → Geliştirici modu.
 2. **Paketlenmemiş öğe yükle** → `bots/goruntuleme` klasörü.
 3. Sahibinden’e giriş yapmış profilde kullanın.
-4. Backend’de migration `011_sahibinden_listings.sql` çalışmış olmalı.
+4. Backend migration'ları: `011` + `012_sahibinden_job_queue.sql`
+
+## Çoklu makine
+
+Tüm Chrome profilleri **aynı API**'yi kullanmalı. Her birine **benzersiz Makine ID** verin (örn. `sahibinden-GPU-1` … `GPU-10`).
+
+Sunucu merkezi kuyruk yönetir — yeni Chrome açsanız sıfırdan başlamaz:
+
+| İş | Koordinasyon |
+|----|--------------|
+| Liste sayfası | `claim-list-page` — her makine farklı offset |
+| Detay | `need-detail` + satır kilidi — aynı ilan iki kez verilmez |
+| Görüntüleme | `claim-view` — dağıtık kuyruk |
 
 ## Popup
 
@@ -49,7 +61,10 @@ Prefix dönüşümü: `thmb` (~3 KB), `x5` (~33 KB), `big` (~74 KB).
 ## API uçları
 
 - `GET /sahibinden/listings/stats`
+- `GET /sahibinden/listings/claim-list-page`
+- `POST /sahibinden/listings/complete-list-page`
 - `POST /sahibinden/listings/sync-batch`
 - `GET /sahibinden/listings/need-detail`
 - `POST /sahibinden/listings/:ilanId/detail`
+- `POST /sahibinden/listings/:ilanId/release-detail`
 - `GET /sahibinden/listings/claim-view`
