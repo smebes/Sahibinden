@@ -25,6 +25,7 @@ const state = {
   syncOffset: 0,
   syncTotalPages: null,
   listScanComplete: false,
+  syncTabId: null,
   settings: null,
   fleetMode: false,
   fleetMachineId: '',
@@ -191,31 +192,60 @@ async function fleetGet(path, params = {}) {
   return data;
 }
 
-async function fetchWithRetry(url, { referer, retries = 3 } = {}) {
-  let delay = 5000;
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
+async function closeSyncTab() {
+  if (!state.syncTabId) return;
+  try {
+    await chrome.tabs.remove(state.syncTabId);
+  } catch {
+    /* tab zaten kapalı */
+  }
+  state.syncTabId = null;
+}
+
+async function fetchListPageViaTab(url) {
+  const { headlessTabs } = state.settings;
+  let tabId = state.syncTabId;
+
+  if (tabId) {
     try {
-      const res = await fetch(url, {
-        credentials: 'include',
-        headers: {
-          Accept: 'text/html',
-          Referer: referer || DEFAULT_STORE_URL,
-        },
-      });
-      if (res.status === 429) {
-        await sleep(delay);
-        delay *= 2;
-        continue;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res;
-    } catch (err) {
-      if (attempt === retries) throw err;
-      await sleep(delay);
-      delay *= 2;
+      await chrome.tabs.get(tabId);
+      await chrome.tabs.update(tabId, { url, active: !headlessTabs });
+    } catch {
+      tabId = null;
+      state.syncTabId = null;
     }
   }
-  throw new Error('fetch başarısız');
+
+  if (!tabId) {
+    const tab = await chrome.tabs.create({ url, active: !headlessTabs });
+    tabId = tab.id;
+    state.syncTabId = tabId;
+  }
+
+  await waitForTabLoad(tabId, 60000);
+  await sleep(randomDelay(1500, 2500));
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['lib/photo-urls.js', 'lib/parse-list.js'],
+  });
+
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      if (typeof SahibindenParseList !== 'undefined') {
+        return SahibindenParseList.parseListPageFromDocument(document);
+      }
+      return { items: [], totalPages: null, blocked: true };
+    },
+  });
+
+  const parsed = injection?.result;
+  if (!parsed) throw new Error('Liste sayfası okunamadı');
+  if (parsed.blocked) {
+    throw new Error('Sahibinden erişim engeli (403/captcha) — giriş yapılı profilde tekrar deneyin');
+  }
+  return parsed;
 }
 
 async function refreshDbStats() {
@@ -239,9 +269,7 @@ async function syncOneListPage() {
   state.phase = 'sync';
   await broadcastProgress({ message: `Liste sayfası ${listPage} taranıyor…` });
 
-  const res = await fetchWithRetry(url, { referer: store.referer });
-  const html = await res.text();
-  const parsed = SahibindenParseList.parseListPageHtml(html);
+  const parsed = await fetchListPageViaTab(url);
 
   if (parsed.totalPages && !state.syncTotalPages) {
     state.syncTotalPages = parsed.totalPages;
@@ -392,9 +420,18 @@ async function runPipeline() {
     const readyView = stats.ready_view || 0;
 
     if (!state.listScanComplete) {
-      const hasMore = await syncOneListPage();
-      if (hasMore) continue;
-      state.listScanComplete = true;
+      try {
+        const hasMore = await syncOneListPage();
+        if (hasMore) continue;
+        state.listScanComplete = true;
+        await closeSyncTab();
+      } catch (err) {
+        await closeSyncTab();
+        fleetLog('error', 'sync_failed', err.message, { offset: state.syncOffset }).catch(() => {});
+        await broadcastProgress({ message: `Liste hatası: ${err.message} — 60 sn sonra tekrar` });
+        await sleep(60000);
+        continue;
+      }
     }
 
     if (needDetail > 0) {
@@ -464,6 +501,7 @@ async function runBot() {
     state.running = false;
     state.paused = false;
     state.phase = 'idle';
+    await closeSyncTab();
     await broadcastProgress({ phase: 'idle' });
     fleetHeartbeat(state.fleetMode ? 'idle' : 'offline').catch(() => {});
   }
@@ -639,6 +677,7 @@ function stopBot() {
   state.running = false;
   state.paused = false;
   state.queue = [];
+  closeSyncTab().catch(() => {});
 }
 
 function pauseBot() {
