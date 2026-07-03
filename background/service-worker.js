@@ -197,6 +197,32 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** MV3 service worker uzun sekme beklerken uyuyabilir — periyodik ping ile canlı tut. */
+function keepServiceWorkerAlive() {
+  const id = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 20000);
+  return () => clearInterval(id);
+}
+
+async function postDetailWithRetry(ilanId, payload) {
+  let lastErr;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      return await fleetPost(`/listings/${ilanId}/detail`, payload, {
+        timeoutMs: 60000,
+        retries: 1,
+      });
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 5) {
+        await sleep(3000 * attempt);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function broadcastProgress(extra = {}) {
   const payload = {
     type: 'progress',
@@ -251,12 +277,18 @@ function apiPrefix() {
 }
 
 async function fleetFetch(url, opts = {}, retries = 3) {
+  const timeoutMs = opts.timeoutMs || 30000;
+  const fetchOpts = { ...opts };
+  delete fetchOpts.timeoutMs;
+  delete fetchOpts.retries;
+
   let lastErr;
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
+  const attempts = opts.retries ?? retries;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { ...opts, signal: controller.signal });
+      const res = await fetch(url, { ...fetchOpts, signal: controller.signal });
       clearTimeout(timer);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -264,23 +296,26 @@ async function fleetFetch(url, opts = {}, retries = 3) {
     } catch (err) {
       clearTimeout(timer);
       lastErr = err;
-      const msg = err.name === 'AbortError' ? 'API zaman aşımı (30 sn)' : err.message;
-      if (attempt < retries) {
+      const msg = err.name === 'AbortError' ? `API zaman aşımı (${Math.round(timeoutMs / 1000)} sn)` : err.message;
+      lastErr = new Error(msg);
+      if (attempt < attempts) {
         await sleep(2000 * attempt);
         continue;
       }
-      throw new Error(msg);
+      throw lastErr;
     }
   }
   throw lastErr;
 }
 
-async function fleetPost(path, body) {
+async function fleetPost(path, body, opts = {}) {
   const base = apiBaseFromUrl(state.apiUrl);
   return fleetFetch(`${base}${apiPrefix()}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
+    timeoutMs: opts.timeoutMs || 30000,
+    retries: opts.retries,
   });
 }
 
@@ -424,6 +459,7 @@ async function scrapeAndSaveDetail(job) {
   await broadcastProgress({ message: `Detay: ${title || ilanId}` });
 
   let tab = null;
+  const stopKeepalive = keepServiceWorkerAlive();
   try {
     tab = await chrome.tabs.create({ url, active: !headlessTabs });
     await waitForTabLoad(tab.id, 60000);
@@ -444,15 +480,26 @@ async function scrapeAndSaveDetail(job) {
     const detail = injection?.result;
     if (!detail) throw new Error('Detay parse edilemedi');
     detail.ilanNo = detail.ilanNo || ilanId;
-    await fleetPost(`/listings/${ilanId}/detail`, { detail, url, storeKey: storeConfig(state.settings).key });
+
+    if (tab?.id) {
+      try { await chrome.tabs.remove(tab.id); } catch { /* */ }
+      tab = null;
+    }
+
+    await postDetailWithRetry(ilanId, {
+      detail,
+      url,
+      storeKey: storeConfig(state.settings).key,
+    });
     state.stats.detailsDone += 1;
     fleetLog('info', 'detail_saved', title || ilanId, { ilanId }).catch(() => {});
   } catch (err) {
     state.stats.detailsFailed += 1;
-    fleetPost(`/listings/${ilanId}/release-detail`, {}).catch(() => {});
+    fleetPost(`/listings/${ilanId}/release-detail`, {}, { timeoutMs: 15000, retries: 2 }).catch(() => {});
     fleetLog('error', 'detail_failed', err.message, { ilanId, url }).catch(() => {});
     console.error('Detay hatası:', url, err);
   } finally {
+    stopKeepalive();
     if (tab?.id) {
       try { await chrome.tabs.remove(tab.id); } catch { /* */ }
     }
