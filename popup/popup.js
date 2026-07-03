@@ -20,6 +20,7 @@ const els = {
   delayMax: $('delayMax'),
   dwell: $('dwell'),
   headlessTabs: $('headlessTabs'),
+  rhythmEnabled: $('rhythmEnabled'),
   btnStart: $('btnStart'),
   btnPause: $('btnPause'),
   btnStop: $('btnStop'),
@@ -33,9 +34,22 @@ const PHASE_LABELS = {
   detail: '2 · Detay çekme',
   view: '3 · Görüntüleme',
   wait: 'Bekleme',
+  rest: 'Mola',
   done: 'Tamamlandı',
   error: 'Hata',
 };
+
+function formatRhythmLabel(data) {
+  if (data.rhythmPhase === 'rest' && data.rhythmEndsAt) {
+    const left = Math.max(0, Math.ceil((data.rhythmEndsAt - Date.now()) / 60000));
+    return `Mola · ${left} dk kaldı`;
+  }
+  if (data.rhythmPhase === 'work' && data.rhythmEndsAt) {
+    const left = Math.max(0, Math.ceil((data.rhythmEndsAt - Date.now()) / 60000));
+    return `Çalışıyor · ${left} dk kaldı`;
+  }
+  return null;
+}
 
 function readSettingsFromForm() {
   return {
@@ -49,6 +63,7 @@ function readSettingsFromForm() {
     delayMaxMs: Number(els.delayMax.value) * 1000,
     dwellMs: Number(els.dwell.value) * 1000,
     headlessTabs: els.headlessTabs.checked,
+    rhythmEnabled: els.rhythmEnabled?.checked !== false,
     pipelineMode: true,
     enableFavorite: true,
   };
@@ -63,6 +78,9 @@ function applySettingsToForm(settings) {
   if (settings.delayMaxMs != null) els.delayMax.value = settings.delayMaxMs / 1000;
   if (settings.dwellMs != null) els.dwell.value = settings.dwellMs / 1000;
   if (settings.headlessTabs != null) els.headlessTabs.checked = settings.headlessTabs;
+  if (settings.rhythmEnabled != null && els.rhythmEnabled) {
+    els.rhythmEnabled.checked = settings.rhythmEnabled;
+  }
 }
 
 function setUiRunning(running, paused = false) {
@@ -109,7 +127,8 @@ function updateStats(data) {
   if (db) updateDbStats(db);
 
   const phase = data.phase || 'idle';
-  els.phaseLabel.textContent = PHASE_LABELS[phase] || phase;
+  const rhythmLabel = formatRhythmLabel(data);
+  els.phaseLabel.textContent = rhythmLabel || PHASE_LABELS[phase] || phase;
 
   if (data.message) {
     els.statusDetail.textContent = data.message;
@@ -136,6 +155,8 @@ async function refreshStatus() {
   updateStats({
     stats: res.stats,
     phase: res.phase,
+    rhythmPhase: res.rhythmPhase,
+    rhythmEndsAt: res.rhythmEndsAt,
     dbStats: res.dbStats,
     ...(res.lastProgress || {}),
   });

@@ -56,7 +56,13 @@ Detay kaydında `gorseller` alanı:
 Prefix dönüşümü: `thmb` (~3 KB), `x5` (~33 KB), `big` (~74 KB).
 
 
-`http://<api>:3009/fleet?bot=sahibinden` — canlı makine durumu ve uzaktan başlat/durdur.
+## Otomatik mola (v1.4.1)
+
+Varsayılan: **10–15 dk çalış** → **20–40 dk mola** (her dilim rastgele). Saatte yaklaşık bir aktif pencere.
+
+Popup → Gelişmiş ayarlar → «Otomatik mola» ile kapatılabilir. Manuel Duraklat hâlâ geçerli.
+
+## Fleet dashboard
 
 ## API uçları
 

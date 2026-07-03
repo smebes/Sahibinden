@@ -29,6 +29,8 @@ const state = {
   fleetMachineLabel: '',
   apiUrl: DEFAULT_API_URL,
   pipelineMode: true,
+  rhythmPhase: 'work',
+  rhythmEndsAt: 0,
 };
 
 function storeConfig(settings) {
@@ -78,6 +80,11 @@ async function getSettings() {
     'apiUrl',
     'pipelineMode',
     'syncPageLimit',
+    'rhythmEnabled',
+    'rhythmWorkMinMin',
+    'rhythmWorkMaxMin',
+    'rhythmRestMinMin',
+    'rhythmRestMaxMin',
   ]);
   return {
     listingUrlsText: stored.listingUrlsText || '',
@@ -97,7 +104,82 @@ async function getSettings() {
     apiUrl: stored.apiUrl || DEFAULT_API_URL,
     pipelineMode: stored.pipelineMode !== false,
     syncPageLimit: stored.syncPageLimit ?? null,
+    rhythmEnabled: stored.rhythmEnabled !== false,
+    rhythmWorkMinMin: stored.rhythmWorkMinMin ?? 10,
+    rhythmWorkMaxMin: stored.rhythmWorkMaxMin ?? 15,
+    rhythmRestMinMin: stored.rhythmRestMinMin ?? 20,
+    rhythmRestMaxMin: stored.rhythmRestMaxMin ?? 40,
   };
+}
+
+function rhythmConfig(settings) {
+  const s = settings || state.settings || {};
+  return {
+    enabled: s.rhythmEnabled !== false,
+    workMinMs: (s.rhythmWorkMinMin ?? 10) * 60 * 1000,
+    workMaxMs: (s.rhythmWorkMaxMin ?? 15) * 60 * 1000,
+    restMinMs: (s.rhythmRestMinMin ?? 20) * 60 * 1000,
+    restMaxMs: (s.rhythmRestMaxMin ?? 40) * 60 * 1000,
+  };
+}
+
+function startRhythmWorkPhase() {
+  const r = rhythmConfig();
+  const ms = randomDelay(r.workMinMs, r.workMaxMs);
+  state.rhythmPhase = 'work';
+  state.rhythmEndsAt = Date.now() + ms;
+  const min = Math.round(ms / 60000);
+  broadcastProgress({
+    message: `Çalışma dilimi (~${min} dk)`,
+    rhythmPhase: 'work',
+    rhythmEndsAt: state.rhythmEndsAt,
+  }).catch(() => {});
+}
+
+function startRhythmRestPhase() {
+  const r = rhythmConfig();
+  closeSyncTab().catch(() => {});
+  const ms = randomDelay(r.restMinMs, r.restMaxMs);
+  state.rhythmPhase = 'rest';
+  state.rhythmEndsAt = Date.now() + ms;
+  state.phase = 'rest';
+  const min = Math.round(ms / 60000);
+  fleetHeartbeat('idle', { message: `Mola ~${min} dk` }).catch(() => {});
+  broadcastProgress({
+    message: `Mola (~${min} dk)`,
+    rhythmPhase: 'rest',
+    rhythmEndsAt: state.rhythmEndsAt,
+  }).catch(() => {});
+}
+
+async function enforceRhythm() {
+  const r = rhythmConfig();
+  if (!r.enabled) return;
+
+  if (!state.rhythmEndsAt) startRhythmWorkPhase();
+
+  while (state.running && !state.paused) {
+    const now = Date.now();
+    if (now >= state.rhythmEndsAt) {
+      if (state.rhythmPhase === 'work') startRhythmRestPhase();
+      else startRhythmWorkPhase();
+      await sleep(300);
+      continue;
+    }
+    if (state.rhythmPhase === 'rest') {
+      const leftMs = state.rhythmEndsAt - now;
+      const leftMin = Math.max(1, Math.ceil(leftMs / 60000));
+      state.phase = 'rest';
+      await broadcastProgress({
+        message: `Mola · ${leftMin} dk kaldı`,
+        rhythmPhase: 'rest',
+        rhythmEndsAt: state.rhythmEndsAt,
+      });
+      await sleep(Math.min(30000, leftMs));
+      continue;
+    }
+    return;
+  }
 }
 
 function buildQueueFromSettings(settings) {
@@ -123,6 +205,8 @@ async function broadcastProgress(extra = {}) {
     queueLength: state.queue.length,
     stats: { ...state.stats },
     dbStats: state.dbStats,
+    rhythmPhase: state.rhythmPhase,
+    rhythmEndsAt: state.rhythmEndsAt,
     ...extra,
   };
   await chrome.storage.local.set({ lastProgress: payload });
@@ -416,6 +500,10 @@ async function runPipeline() {
     }
     if (!state.running) break;
 
+    await enforceRhythm();
+    if (!state.running || state.paused) continue;
+    if (state.rhythmPhase === 'rest') continue;
+
     await refreshDbStats();
     const stats = state.dbStats || {};
     const machineId = state.fleetMachineId || 'local';
@@ -475,6 +563,10 @@ async function runBot() {
 
   state.running = true;
   state.paused = false;
+  state.settings = state.settings || await getSettings();
+  if (rhythmConfig(state.settings).enabled) {
+    startRhythmWorkPhase();
+  }
 
   try {
     await broadcastProgress({ phase: 'start' });
@@ -500,6 +592,7 @@ async function runBot() {
     state.running = false;
     state.paused = false;
     state.phase = 'idle';
+    state.rhythmEndsAt = 0;
     await closeSyncTab();
     await broadcastProgress({ phase: 'idle' });
     fleetHeartbeat(state.fleetMode ? 'idle' : 'offline').catch(() => {});
@@ -555,7 +648,13 @@ function buildPopupMessage() {
   const s = state.stats;
   const d = state.dbStats;
   if (state.running) {
-    const phaseLabel = { sync: 'Liste', detail: 'Detay', view: 'Görüntüleme', wait: 'Bekleme' }[state.phase] || state.phase;
+    const phaseLabel = {
+      sync: 'Liste', detail: 'Detay', view: 'Görüntüleme', wait: 'Bekleme', rest: 'Mola',
+    }[state.phase] || state.phase;
+    if (state.rhythmPhase === 'rest') {
+      const left = state.rhythmEndsAt ? Math.ceil((state.rhythmEndsAt - Date.now()) / 60000) : 0;
+      return `Mola · ${Math.max(0, left)} dk kaldı`;
+    }
     if (d) {
       const listInfo = d.list_scan_complete
         ? 'liste tamam'
@@ -752,6 +851,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           running: state.running,
           paused: state.paused,
           phase: state.phase,
+          rhythmPhase: state.rhythmPhase,
+          rhythmEndsAt: state.rhythmEndsAt,
           queueLength: state.queue.length,
           stats: state.stats,
           dbStats,
