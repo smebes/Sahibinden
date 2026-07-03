@@ -250,26 +250,45 @@ function apiPrefix() {
     : '/sahibinden';
 }
 
+async function fleetFetch(url, opts = {}, retries = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const res = await fetch(url, { ...opts, signal: controller.signal });
+      clearTimeout(timer);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      const msg = err.name === 'AbortError' ? 'API zaman aşımı (30 sn)' : err.message;
+      if (attempt < retries) {
+        await sleep(2000 * attempt);
+        continue;
+      }
+      throw new Error(msg);
+    }
+  }
+  throw lastErr;
+}
+
 async function fleetPost(path, body) {
   const base = apiBaseFromUrl(state.apiUrl);
-  const res = await fetch(`${base}${apiPrefix()}${path}`, {
+  return fleetFetch(`${base}${apiPrefix()}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
 }
 
 async function fleetGet(path, params = {}) {
   const base = apiBaseFromUrl(state.apiUrl);
   const qs = new URLSearchParams(params).toString();
   const url = `${base}${apiPrefix()}${path}${qs ? `?${qs}` : ''}`;
-  const res = await fetch(url);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  return fleetFetch(url);
 }
 
 async function closeSyncTab() {
@@ -378,8 +397,8 @@ async function syncOneListPage() {
     state.stats.listingsFound += parsed.items.length;
   }
 
-  const listScanComplete = parsed.items.length === 0
-    || (parsed.totalPages && listPage >= parsed.totalPages);
+  const totalPages = parsed.totalPages || state.dbStats?.total_pages || null;
+  const listScanComplete = totalPages != null && listPage >= totalPages;
 
   await fleetPost('/listings/complete-list-page', {
     storeKey: store.key,
@@ -422,6 +441,7 @@ async function scrapeAndSaveDetail(job) {
     });
     const detail = injection?.result;
     if (!detail) throw new Error('Detay parse edilemedi');
+    detail.ilanNo = detail.ilanNo || ilanId;
     await fleetPost(`/listings/${ilanId}/detail`, { detail, url, storeKey: storeConfig(state.settings).key });
     state.stats.detailsDone += 1;
     fleetLog('info', 'detail_saved', title || ilanId, { ilanId }).catch(() => {});
@@ -532,27 +552,41 @@ async function runPipeline() {
     }
 
     if ((stats.need_detail || 0) > 0) {
-      const { items } = await fleetGet('/listings/need-detail', {
-        storeKey: store.key,
-        machineId,
-        limit: 1,
-      });
-      if (items?.length) {
-        for (const job of items) {
-          if (!state.running || state.paused) break;
-          await scrapeAndSaveDetail(job);
+      try {
+        const { items } = await fleetGet('/listings/need-detail', {
+          storeKey: store.key,
+          machineId,
+          limit: 1,
+        });
+        if (items?.length) {
+          for (const job of items) {
+            if (!state.running || state.paused) break;
+            await scrapeAndSaveDetail(job);
+          }
+          continue;
         }
+      } catch (err) {
+        fleetLog('error', 'need_detail_failed', err.message, { machineId }).catch(() => {});
+        await broadcastProgress({ message: `Detay kuyruğu hatası: ${err.message} — 30 sn sonra tekrar` });
+        await sleep(30000);
         continue;
       }
     }
 
     if ((stats.ready_view || 0) > 0) {
-      const { job } = await fleetGet('/listings/claim-view', {
-        storeKey: store.key,
-        machineId,
-      });
-      if (job) {
-        await viewListingFromJob(job);
+      try {
+        const { job } = await fleetGet('/listings/claim-view', {
+          storeKey: store.key,
+          machineId,
+        });
+        if (job) {
+          await viewListingFromJob(job);
+          continue;
+        }
+      } catch (err) {
+        fleetLog('error', 'claim_view_failed', err.message, { machineId }).catch(() => {});
+        await broadcastProgress({ message: `Görüntüleme hatası: ${err.message} — 30 sn sonra tekrar` });
+        await sleep(30000);
         continue;
       }
     }
