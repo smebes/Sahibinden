@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FixParts Görüntüleme Botu",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Sahibinden mağaza ilanları: link, genel, detay ve görüntüleme pipeline.",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": [

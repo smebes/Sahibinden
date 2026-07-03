@@ -144,7 +144,7 @@ function startRhythmRestPhase() {
   state.rhythmEndsAt = Date.now() + ms;
   state.phase = 'rest';
   const min = Math.round(ms / 60000);
-  fleetHeartbeat('idle', { message: `Mola ~${min} dk` }).catch(() => {});
+  fleetHeartbeat('paused', { message: `Mola ~${min} dk` }).catch(() => {});
   broadcastProgress({
     message: `Mola (~${min} dk)`,
     rhythmPhase: 'rest',
@@ -175,6 +175,7 @@ async function enforceRhythm() {
         rhythmPhase: 'rest',
         rhythmEndsAt: state.rhythmEndsAt,
       });
+      fleetHeartbeat('paused', { message: `Mola ${leftMin} dk` }).catch(() => {});
       await sleep(Math.min(30000, leftMs));
       continue;
     }
@@ -281,50 +282,58 @@ async function closeSyncTab() {
   state.syncTabId = null;
 }
 
-async function fetchListPageViaTab(url) {
+async function fetchListPageViaTab(url, retry = true) {
   const { headlessTabs } = state.settings;
   let tabId = state.syncTabId;
 
-  if (tabId) {
-    try {
-      await chrome.tabs.get(tabId);
-      await chrome.tabs.update(tabId, { url, active: !headlessTabs });
-    } catch {
-      tabId = null;
-      state.syncTabId = null;
-    }
-  }
-
-  if (!tabId) {
-    const tab = await chrome.tabs.create({ url, active: !headlessTabs });
-    tabId = tab.id;
-    state.syncTabId = tabId;
-  }
-
-  await waitForTabLoad(tabId, 60000);
-  await sleep(randomDelay(1500, 2500));
-
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ['lib/photo-urls.js', 'lib/parse-list.js'],
-  });
-
-  const [injection] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      if (typeof SahibindenParseList !== 'undefined') {
-        return SahibindenParseList.parseListPageFromDocument(document);
+  try {
+    if (tabId) {
+      try {
+        await chrome.tabs.get(tabId);
+        await chrome.tabs.update(tabId, { url, active: !headlessTabs });
+      } catch {
+        tabId = null;
+        state.syncTabId = null;
       }
-      return { items: [], totalPages: null, blocked: true };
-    },
-  });
+    }
 
-  const parsed = injection?.result;
-  if (!parsed) throw new Error('Liste sayfası okunamadı');
-  if (parsed.blocked) {
-    throw new Error('Sahibinden erişim engeli (403/captcha) — giriş yapılı profilde tekrar deneyin');
+    if (!tabId) {
+      const tab = await chrome.tabs.create({ url, active: !headlessTabs });
+      tabId = tab.id;
+      state.syncTabId = tabId;
+    }
+
+    await waitForTabLoad(tabId, 60000);
+    await sleep(randomDelay(1500, 2500));
+
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['lib/photo-urls.js', 'lib/parse-list.js'],
+    });
+
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        if (typeof SahibindenParseList !== 'undefined') {
+          return SahibindenParseList.parseListPageFromDocument(document);
+        }
+        return { items: [], totalPages: null, blocked: true };
+      },
+    });
+
+    const parsed = injection?.result;
+    if (!parsed) throw new Error('Liste sayfası okunamadı');
+    if (parsed.blocked) {
+      throw new Error('Sahibinden erişim engeli (403/captcha) — giriş yapılı profilde tekrar deneyin');
+    }
+    return parsed;
+  } catch (err) {
+    await closeSyncTab();
+    if (retry && /tab|No tab/i.test(err.message)) {
+      return fetchListPageViaTab(url, false);
+    }
+    throw err;
   }
-  return parsed;
 }
 
 async function refreshDbStats() {
@@ -413,7 +422,7 @@ async function scrapeAndSaveDetail(job) {
     });
     const detail = injection?.result;
     if (!detail) throw new Error('Detay parse edilemedi');
-    await fleetPost(`/listings/${ilanId}/detail`, { detail });
+    await fleetPost(`/listings/${ilanId}/detail`, { detail, url, storeKey: storeConfig(state.settings).key });
     state.stats.detailsDone += 1;
     fleetLog('info', 'detail_saved', title || ilanId, { ilanId }).catch(() => {});
   } catch (err) {
