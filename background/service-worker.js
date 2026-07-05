@@ -2,6 +2,7 @@ importScripts('../config.js', '../lib/photo-urls.js', '../lib/parse-list.js', '.
 
 const DEFAULT_STORE_URL = 'https://fixpartsyedekparca.sahibinden.com/';
 const FLEET_HEARTBEAT_ALARM = 'viewFleetHeartbeat';
+const AUTO_RUN_ALARM = 'fixpartsAutoRun';
 const BOT_TYPE = 'sahibinden_view';
 const DEFAULT_API_URL = typeof VIEW_BOT_API !== 'undefined'
   ? `${VIEW_BOT_API.base}`
@@ -85,6 +86,8 @@ async function getSettings() {
     'rhythmWorkMaxMin',
     'rhythmRestMinMin',
     'rhythmRestMaxMin',
+    'autoRunHourly',
+    'manuallyStopped',
   ]);
   return {
     listingUrlsText: stored.listingUrlsText || '',
@@ -109,6 +112,7 @@ async function getSettings() {
     rhythmWorkMaxMin: stored.rhythmWorkMaxMin ?? 15,
     rhythmRestMinMin: stored.rhythmRestMinMin ?? 20,
     rhythmRestMaxMin: stored.rhythmRestMaxMin ?? 40,
+    autoRunHourly: stored.autoRunHourly !== false,
   };
 }
 
@@ -310,13 +314,23 @@ async function fleetFetch(url, opts = {}, retries = 3) {
 
 async function fleetPost(path, body, opts = {}) {
   const base = apiBaseFromUrl(state.apiUrl);
-  return fleetFetch(`${base}${apiPrefix()}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-    timeoutMs: opts.timeoutMs || 30000,
-    retries: opts.retries,
-  });
+  const url = `${base}${apiPrefix()}${path}`;
+  try {
+    return await fleetFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      timeoutMs: opts.timeoutMs || 30000,
+      retries: opts.retries,
+    });
+  } catch (err) {
+    if (err.message === 'Failed to fetch') {
+      throw new Error(
+        `API erişilemiyor: ${url} — sunucu (${base}) ayakta mı? Popup API: http://51.102.128.78:3009`
+      );
+    }
+    throw err;
+  }
 }
 
 async function fleetGet(path, params = {}) {
@@ -480,6 +494,7 @@ async function scrapeAndSaveDetail(job) {
     const detail = injection?.result;
     if (!detail) throw new Error('Detay parse edilemedi');
     detail.ilanNo = detail.ilanNo || ilanId;
+    if (!detail.title && title) detail.title = title;
 
     if (tab?.id) {
       try { await chrome.tabs.remove(tab.id); } catch { /* */ }
@@ -805,9 +820,43 @@ async function executeFleetCommands(commands) {
   }
 }
 
-function scheduleFleetHeartbeat() {
+function scheduleFleetAlarms() {
   const min = VIEW_BOT_API?.fleet?.heartbeatMin || 2;
   chrome.alarms.create(FLEET_HEARTBEAT_ALARM, { periodInMinutes: min });
+  chrome.alarms.create(AUTO_RUN_ALARM, { periodInMinutes: 60 });
+}
+
+function defaultStats() {
+  return {
+    listingsFound: 0,
+    viewsDone: 0,
+    viewsFailed: 0,
+    favoritesDone: 0,
+    syncPagesDone: 0,
+    detailsDone: 0,
+    detailsFailed: 0,
+  };
+}
+
+/** MV3 service worker uyuyunca pipeline durur — alarm ile otomatik yeniden başlat. */
+async function ensureBotRunning(reason = 'watchdog') {
+  const stored = await chrome.storage.local.get(['autoRunHourly', 'manuallyStopped']);
+  if (stored.manuallyStopped || stored.autoRunHourly === false) return;
+  if (state.running) return;
+
+  const settings = await getSettings();
+  if (!settings.apiUrl || !settings.fleetMachineId) return;
+
+  state.settings = settings;
+  state.apiUrl = settings.apiUrl;
+  state.pipelineMode = true;
+  state.fleetMachineId = settings.fleetMachineId;
+  state.fleetMachineLabel = settings.fleetMachineLabel || settings.fleetMachineId;
+  state.fleetMode = true;
+  state.stats = defaultStats();
+
+  fleetLog('info', 'auto_restart', `Otomatik başlat (${reason})`).catch(() => {});
+  runBot();
 }
 
 async function startFleetMode() {
@@ -825,39 +874,44 @@ async function startFleetMode() {
     fleetMachineLabel: state.fleetMachineLabel,
     pipelineMode: true,
   });
-  scheduleFleetHeartbeat();
+  scheduleFleetAlarms();
   await fleetLog('info', 'fleet_start', 'Sahibinden pipeline başladı');
   await fleetHeartbeat('idle');
+  await chrome.storage.local.set({ autoRunHourly: true, manuallyStopped: false });
   if (!state.running) {
-    state.stats = {
-      listingsFound: 0,
-      viewsDone: 0,
-      viewsFailed: 0,
-      favoritesDone: 0,
-      syncPagesDone: 0,
-      detailsDone: 0,
-      detailsFailed: 0,
-    };
+    state.stats = defaultStats();
     runBot();
   }
 }
 
 async function tryResumeFleet() {
   const settings = await getSettings();
-  if (!settings.fleetMode || !settings.fleetMachineId) return;
-  state.fleetMode = true;
+  const stored = await chrome.storage.local.get(['fleetMode', 'autoRunHourly', 'manuallyStopped']);
+  if (!settings.fleetMachineId || !settings.apiUrl) return;
+  if (!stored.fleetMode && stored.autoRunHourly === false) return;
+
+  state.fleetMode = stored.fleetMode === true || stored.autoRunHourly !== false;
   state.pipelineMode = settings.pipelineMode !== false;
   state.fleetMachineId = settings.fleetMachineId;
   state.fleetMachineLabel = settings.fleetMachineLabel || settings.fleetMachineId;
   state.apiUrl = settings.apiUrl;
   state.settings = settings;
-  scheduleFleetHeartbeat();
+  scheduleFleetAlarms();
   await fleetHeartbeat(state.running ? 'viewing' : 'idle');
+  if (!stored.manuallyStopped && stored.autoRunHourly !== false) {
+    await ensureBotRunning('resume');
+  }
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === FLEET_HEARTBEAT_ALARM) {
-    tryResumeFleet().catch(() => {});
+    tryResumeFleet()
+      .then(() => ensureBotRunning('heartbeat'))
+      .catch(() => {});
+    return;
+  }
+  if (alarm.name === AUTO_RUN_ALARM) {
+    ensureBotRunning('hourly').catch(() => {});
   }
 });
 
@@ -867,6 +921,7 @@ function stopBot() {
   state.running = false;
   state.paused = false;
   state.queue = [];
+  chrome.storage.local.set({ manuallyStopped: true }).catch(() => {});
   closeSyncTab().catch(() => {});
 }
 
@@ -891,16 +946,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         state.pipelineMode = state.settings.pipelineMode !== false && !!state.apiUrl;
         state.fleetMachineId = state.settings.fleetMachineId || 'local';
 
+        await chrome.storage.local.set({
+          autoRunHourly: state.settings.autoRunHourly !== false,
+          manuallyStopped: false,
+          fleetMode: true,
+        });
+        scheduleFleetAlarms();
+
         if (state.pipelineMode) {
-          state.stats = {
-            listingsFound: 0,
-            viewsDone: 0,
-            viewsFailed: 0,
-            favoritesDone: 0,
-            syncPagesDone: 0,
-            detailsDone: 0,
-            detailsFailed: 0,
-          };
+          state.stats = defaultStats();
           runBot();
           sendResponse({ ok: true, mode: 'pipeline' });
           break;
@@ -986,7 +1040,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         stopBot();
         state.fleetMode = false;
         chrome.alarms.clear(FLEET_HEARTBEAT_ALARM);
-        await chrome.storage.local.set({ fleetMode: false });
+        chrome.alarms.clear(AUTO_RUN_ALARM);
+        await chrome.storage.local.set({ fleetMode: false, manuallyStopped: true });
         await fleetHeartbeat('offline');
         sendResponse({ ok: true });
         break;

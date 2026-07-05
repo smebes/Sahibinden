@@ -21,6 +21,7 @@ const els = {
   dwell: $('dwell'),
   headlessTabs: $('headlessTabs'),
   rhythmEnabled: $('rhythmEnabled'),
+  autoRunHourly: $('autoRunHourly'),
   btnStart: $('btnStart'),
   btnPause: $('btnPause'),
   btnStop: $('btnStop'),
@@ -64,6 +65,7 @@ function readSettingsFromForm() {
     dwellMs: Number(els.dwell.value) * 1000,
     headlessTabs: els.headlessTabs.checked,
     rhythmEnabled: els.rhythmEnabled?.checked !== false,
+    autoRunHourly: els.autoRunHourly?.checked !== false,
     pipelineMode: true,
     enableFavorite: true,
   };
@@ -80,6 +82,9 @@ function applySettingsToForm(settings) {
   if (settings.headlessTabs != null) els.headlessTabs.checked = settings.headlessTabs;
   if (settings.rhythmEnabled != null && els.rhythmEnabled) {
     els.rhythmEnabled.checked = settings.rhythmEnabled;
+  }
+  if (settings.autoRunHourly != null && els.autoRunHourly) {
+    els.autoRunHourly.checked = settings.autoRunHourly;
   }
 }
 
