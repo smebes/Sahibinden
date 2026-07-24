@@ -17,7 +17,16 @@ Zaten taranmış ilanlarda yalnızca görüntüleme yapılır; link ve genel bil
 1. Chrome → `chrome://extensions` → Geliştirici modu.
 2. **Paketlenmemiş öğe yükle** → `bots/goruntuleme` klasörü.
 3. Sahibinden’e giriş yapmış profilde kullanın.
-4. Backend migration'ları: `011` + `012_sahibinden_job_queue.sql`
+4. Backend migration'ları: `011` + `012` + `021` (sahibinden_active)
+
+## Ölü ilan tespiti (v1.5.3+)
+
+Detay/görüntüleme sayfasında sıra kritik:
+1. **Captcha/403 engeli** → geçici → `release-detail` / retry — **asla** mark-removed yok
+2. **"Yayından kaldırılmış" / 404** → kalıcı → `mark-removed` / `view-failed` (`sahibinden_active=false`)
+3. Normal parse / görüntüleme
+
+Backend: `need-detail` ve `claim-view` zaten `WHERE sahibinden_active` filtreler.
 
 ## Çoklu makine
 

@@ -469,6 +469,7 @@ async function scrapeAndSaveDetail(job) {
   const { url, title } = job;
   if (!ilanId) throw new Error('Job ilan_id eksik');
   const { headlessTabs } = state.settings;
+  const storeKey = storeConfig(state.settings).key;
   state.phase = 'detail';
   await broadcastProgress({ message: `Detay: ${title || ilanId}` });
 
@@ -493,6 +494,32 @@ async function scrapeAndSaveDetail(job) {
     });
     const detail = injection?.result;
     if (!detail) throw new Error('Detay parse edilemedi');
+
+    // 1) Captcha/403 → GEÇİCİ: claim bırak, sonra tekrar dene. mark-removed YAPMA.
+    if (detail.accessBlocked) {
+      if (tab?.id) {
+        try { await chrome.tabs.remove(tab.id); } catch { /* */ }
+        tab = null;
+      }
+      throw new Error('Sahibinden erişim engeli (403/captcha) — geçici, retry');
+    }
+
+    // 2) Yayından kalkmış → KALICI: mark-removed, kuyruğa geri koyma
+    if (detail.listingGone) {
+      if (tab?.id) {
+        try { await chrome.tabs.remove(tab.id); } catch { /* */ }
+        tab = null;
+      }
+      await fleetPost(`/listings/${ilanId}/mark-removed`, {
+        storeKey,
+        reason: 'detail_404',
+      }, { timeoutMs: 15000, retries: 2 });
+      state.stats.detailsFailed += 1;
+      fleetLog('warn', 'detail_listing_gone', title || ilanId, { ilanId, url }).catch(() => {});
+      await broadcastProgress({ message: `Yayından kalkmış: ${ilanId}` });
+      return;
+    }
+
     detail.ilanNo = detail.ilanNo || ilanId;
     if (!detail.title && title) detail.title = title;
 
@@ -504,12 +531,14 @@ async function scrapeAndSaveDetail(job) {
     await postDetailWithRetry(ilanId, {
       detail,
       url,
-      storeKey: storeConfig(state.settings).key,
+      storeKey,
     });
     state.stats.detailsDone += 1;
     fleetLog('info', 'detail_saved', title || ilanId, { ilanId }).catch(() => {});
   } catch (err) {
     state.stats.detailsFailed += 1;
+    // Geçici hatalar (sekme sürükleme vb.): claim bırak, tekrar denensin
+    // mark-removed YAPMA
     fleetPost(`/listings/${ilanId}/release-detail`, {}, { timeoutMs: 15000, retries: 2 }).catch(() => {});
     fleetLog('error', 'detail_failed', err.message, { ilanId, url }).catch(() => {});
     console.error('Detay hatası:', url, err);
@@ -552,12 +581,49 @@ async function tryFavoriteListing(tabId) {
 
 async function viewListingFromJob(job) {
   const { url, title, shouldFavorite } = job;
+  const ilanId = job.ilanId || job.ilan_id || null;
   const { dwellMs, headlessTabs, delayMinMs, delayMaxMs } = state.settings;
+  const storeKey = storeConfig(state.settings).key;
   state.phase = 'view';
   let tab = null;
   try {
     tab = await chrome.tabs.create({ url, active: !headlessTabs });
     await waitForTabLoad(tab.id, 60000);
+
+    // Sayfa durumu: 1) engel (geçici) 2) ölü ilan (kalıcı)
+    if (ilanId) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['lib/parse-detail.js'],
+      });
+      const [pageCheck] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          if (typeof SahibindenParseDetail === 'undefined') {
+            return { accessBlocked: false, listingGone: false };
+          }
+          return {
+            accessBlocked: SahibindenParseDetail.isAccessBlocked(),
+            listingGone: SahibindenParseDetail.isListingGone(),
+          };
+        },
+      });
+      const status = pageCheck?.result || {};
+      if (status.accessBlocked) {
+        throw new Error('Sahibinden erişim engeli (403/captcha) — geçici, view-failed yok');
+      }
+      if (status.listingGone) {
+        await fleetPost(`/listings/${ilanId}/view-failed`, {
+          storeKey,
+          reason: 'view_bot_removed',
+        }, { timeoutMs: 15000, retries: 2 });
+        state.stats.viewsFailed += 1;
+        fleetLog('warn', 'view_listing_gone', title || ilanId, { ilanId, url }).catch(() => {});
+        await broadcastProgress({ message: `Yayından kalkmış (view): ${ilanId}` });
+        return;
+      }
+    }
+
     await sleep(dwellMs);
     if (shouldFavorite) {
       const ok = await tryFavoriteListing(tab.id);
@@ -568,7 +634,8 @@ async function viewListingFromJob(job) {
     fleetHeartbeat('viewing', { progress: true }).catch(() => {});
   } catch (e) {
     state.stats.viewsFailed += 1;
-    fleetLog('error', 'view_failed', e.message, { url }).catch(() => {});
+    // Geçici hata: view-failed / mark-removed YAPMA
+    fleetLog('error', 'view_failed', e.message, { url, ilanId }).catch(() => {});
   } finally {
     if (tab?.id) {
       try { await chrome.tabs.remove(tab.id); } catch { /* */ }

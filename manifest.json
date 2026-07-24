@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FixParts Görüntüleme Botu",
-  "version": "1.5.1",
-  "description": "Sahibinden mağaza ilanları: link, genel, detay ve görüntüleme pipeline.",
+  "version": "1.5.3",
+  "description": "Sahibinden pipeline. Ölü ilan: mark-removed. Captcha önce kontrol (geçici).",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": [
     "https://*.sahibinden.com/*",
